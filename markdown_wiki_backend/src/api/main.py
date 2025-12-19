@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -8,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.schemas import ConvertRequest, ConvertResponse, StatusResponse
+from src.converter.engine import convert as md_to_wiki_convert
 
 SERVICE_NAME = "markdown_wiki_backend"
 VERSION = "0.1.0"
@@ -46,65 +46,7 @@ app.add_middleware(
 )
 
 
-def _md_to_wiki_stub(markdown: str) -> tuple[str, list[str]]:
-    """
-    Minimal, dependency-free Markdown -> wiki conversion (temporary stub).
 
-    This function intentionally performs a *non-empty* transformation so the frontend
-    preview works end-to-end until the full engine is implemented.
-
-    Currently handled (best-effort):
-    - Headings (#..######) -> (=..======)
-    - Bullets (-, *, +) -> * and ordered lists (1.) -> #
-    - Fenced code blocks ``` -> {{{ / }}}
-    - Inline code `code` -> {{code}}
-    - Links [text](url) -> [url text]
-    """
-    warnings: list[str] = []
-    text = (markdown or "").replace("\r\n", "\n").replace("\r", "\n")
-
-    # Convert fenced code blocks (```lang ... ```) to wiki-style block delimiters.
-    out_lines: list[str] = []
-    in_code = False
-    for line in text.split("\n"):
-        if line.strip().startswith("```"):
-            if not in_code:
-                in_code = True
-                out_lines.append("{{{")
-            else:
-                in_code = False
-                out_lines.append("}}}")
-            continue
-        out_lines.append(line)
-
-    if in_code:
-        warnings.append("Unclosed fenced code block detected; auto-closed.")
-        out_lines.append("}}}")
-
-    text = "\n".join(out_lines)
-
-    # Headings: # H1 -> = H1 =
-    def repl_heading(m: re.Match[str]) -> str:
-        level = len(m.group(1))
-        title = m.group(2).strip()
-        eq = "=" * level
-        return f"{eq} {title} {eq}"
-
-    text = re.sub(r"^(#{1,6})\s+(.*)$", repl_heading, text, flags=re.MULTILINE)
-
-    # Lists:
-    text = re.sub(r"^(\s*)[-*+]\s+", r"\1* ", text, flags=re.MULTILINE)
-    text = re.sub(r"^(\s*)\d+\.\s+", r"\1# ", text, flags=re.MULTILINE)
-
-    # Inline code: `x` -> {{x}}
-    text = re.sub(r"`([^`]+)`", r"{{\1}}", text)
-
-    # Links: [text](url) -> [url text]
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"[\2 \1]", text)
-
-    # Ensure non-empty output formatting if input had content.
-    normalized = text.strip()
-    return (normalized + ("\n" if normalized else "")), warnings
 
 
 @app.get(
@@ -176,5 +118,5 @@ def convert(req: ConvertRequest) -> ConvertResponse:
     if not md:
         raise HTTPException(status_code=400, detail="markdown is required")
 
-    wiki, warnings = _md_to_wiki_stub(md)
+    wiki, warnings = md_to_wiki_convert(md)
     return ConvertResponse(wiki=wiki, warnings=warnings)
